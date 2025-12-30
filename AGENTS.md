@@ -1,3 +1,5 @@
+# Agent Instructions
+
 You are an agentic coding model. Build a production-quality, OS-agnostic, headless-capable project named **DigPlay** (“Digit Player”) that “plays” GB/GBC/GBA games using base-10 digits of pi as controller inputs.
 
 This version must use **mGBA** as the emulator backend (via mGBA’s built-in Lua scripting API)
@@ -24,11 +26,13 @@ Your harness must treat DigPipe as the source of truth for digits and (optionall
 ## High-level goal
 
 Given:
+
 - a ROM
 - a start digit index
 - mapping configuration
 
 Run an emulation session where each frame’s controller state is derived from pi digits (via DigPipe), and the run is:
+
 - deterministic and resumable
 - able to save/load emulator save-states
 - able to record session video (segmentable)
@@ -66,6 +70,7 @@ Implement a **two-process design**:
 ### Headless requirement
 
 DigPlay must be *usable headlessly*:
+
 - Prefer running mGBA in a headless/virtual display mode when possible (e.g., Xvfb on Linux); otherwise support “minimized window” operation while still running the Lua bridge.
 - The harness must not require interactive clicking once configured. It’s okay if first-time setup requires the user to load the Lua script in mGBA (document the steps).
 
