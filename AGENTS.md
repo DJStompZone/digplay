@@ -1,3 +1,5 @@
+# Agent Instructions
+
 You are an agentic coding model. Build a production-quality, OS-agnostic, headless-capable project named **DigPlay** (“Digit Player”) that “plays” GB/GBC/GBA games using base-10 digits of pi as controller inputs.
 
 This version must use **Stable-Retro** (Farama) as the emulator backend (Python API).
@@ -24,11 +26,13 @@ Your harness must treat DigPipe as the source of truth for digits and (optionall
 ## High-level goal
 
 Given:
+
 - a ROM
 - a start digit index
 - mapping configuration
 
 Run an emulation session where each frame’s controller state is derived from pi digits (via DigPipe), and the run is:
+
 - deterministic and resumable
 - able to save/load emulator save-states
 - able to record session video (segmentable)
@@ -49,6 +53,7 @@ Use the Stable-Retro Python API (`retro.make`, `retro.RetroEnv`):
   - Segment output.
 
 Important: Stable-Retro typically requires a game “integration” (metadata + .state files). DigPlay must:
+
 - Provide clear README instructions for integrating ROMs using Stable-Retro tooling (no ROM distribution).
 - Offer helpful error messages when a ROM is not integrated yet.
 
@@ -111,10 +116,12 @@ Runner requirements:
 Implement a recording strategy:
 
 Option A (preferred): Gymnasium RecordVideo wrapper
+
 - Build env with `render_mode="rgb_array"`, wrap with `gymnasium.wrappers.RecordVideo`.
 - Ensure the wrapper is triggered for long continuous runs (segmenting required; implement segmenting by closing/re-opening env/wrapper periodically).
 
 Option B: Manual frame capture to ffmpeg
+
 - `frame = env.render()` or use returned observation if it’s an image.
 - Pipe frames to ffmpeg via stdin (`rawvideo`).
 - Segment output by time or frame count.
@@ -157,6 +164,7 @@ Note: Stable-Retro identifies games by “integration name” (GAME_NAME), not n
 ## README requirements
 
 Include:
+
 - How to install DigPlay
 - How to install Stable-Retro
 - How to integrate ROMs (high-level; do not provide ROMs)
