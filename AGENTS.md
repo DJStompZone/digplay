@@ -1,6 +1,6 @@
 You are an agentic coding model. Build a production-quality, OS-agnostic, headless-capable project named **DigPlay** (“Digit Player”) that “plays” GB/GBC/GBA games using base-10 digits of pi as controller inputs.
 
-This version must use **mGBA** as the emulator backend (via mGBA’s built-in Lua scripting API)
+This version must use **Stable-Retro** (Farama) as the emulator backend (Python API).
 
 ---
 
@@ -32,42 +32,25 @@ Run an emulation session where each frame’s controller state is derived from p
 - deterministic and resumable
 - able to save/load emulator save-states
 - able to record session video (segmentable)
-- able to “pop the hood” later (memory read/write hooks)
+- able to “pop the hood” later (RAM inspection hooks)
 
 ---
 
-## mGBA constraints and required approach
+## Stable-Retro constraints and required approach
 
-mGBA’s scripting is **Lua-only**. Use mGBA’s documented scripting API objects and callbacks:
+Use the Stable-Retro Python API (`retro.make`, `retro.RetroEnv`):
 
-- `emu.runFrame()` to advance exactly one frame
-- `emu.setKeys(bitmask)` / `emu.addKeys(...)` / `emu.clearKeys(...)` to control input
-- `emu.saveStateBuffer()` / `emu.loadStateBuffer(...)` and/or `saveStateFile/loadStateFile`
-- `emu.screenshot(...)` for snapshots
-- `emu.read8/read16/read32` and `emu.write*` for memory inspection
-- `callbacks.add("keysRead", fn)` or `callbacks.add("frame", fn)` to hook per-frame behavior
+- Must step deterministically: one call to `env.step(keys)` == advance exactly one frame.
+- Controller input should be provided as the correct shape for Stable-Retro’s action space (typically a list/array of button states matching `env.num_buttons` and `env.buttons`).
+- Must support headless operation via `render_mode="rgb_array"` (no GUI required).
+- Must support RAM inspection using `obs_type=retro.Observations.RAM` and/or `env.get_ram()` where appropriate.
+- For recording:
+  - Prefer Gymnasium’s `RecordVideo` wrapper OR a direct “pipe frames to ffmpeg” approach.
+  - Segment output.
 
-Also note: Lua bindings expose a basic TCP socket library (`socket.bind`, `socket.connect`). Use this to communicate with a local Python process if needed.
-
-### Architecture requirement for DigPlay+mGBA
-
-Implement a **two-process design**:
-
-1) **Python orchestrator (DigPlay core)**
-   - Imports and uses DigPipe to produce scheduled Actions or per-frame controller states.
-   - Owns run manifests, checkpoint scheduling, segmentation, logging.
-   - Talks to the Lua script over localhost TCP (single machine assumption).
-
-2) **mGBA Lua “bridge script”**
-   - Runs inside mGBA.
-   - Receives commands from Python: set controller state, run frame, save/load state, read/write memory, screenshot.
-   - Must support deterministic stepping: “apply input -> advance exactly one frame -> report frame index”.
-
-### Headless requirement
-
-DigPlay must be *usable headlessly*:
-- Prefer running mGBA in a headless/virtual display mode when possible (e.g., Xvfb on Linux); otherwise support “minimized window” operation while still running the Lua bridge.
-- The harness must not require interactive clicking once configured. It’s okay if first-time setup requires the user to load the Lua script in mGBA (document the steps).
+Important: Stable-Retro typically requires a game “integration” (metadata + .state files). DigPlay must:
+- Provide clear README instructions for integrating ROMs using Stable-Retro tooling (no ROM distribution).
+- Offer helpful error messages when a ROM is not integrated yet.
 
 ---
 
@@ -85,36 +68,33 @@ Repository layout (suggested):
   - `digpipe_adapter.py` (wires DigPipe into frame/action stream)
   - `backends/`
     - `base.py` (EmulatorBackend ABC)
-    - `mgba_bridge.py` (Python-side TCP client for the Lua bridge)
+    - `stable_retro.py` (StableRetroBackend implementation)
   - `video/`
-    - `recorder.py` (ffmpeg piping/segmentation)
-- `scripts/`
-  - `mgba_bridge.lua` (Lua server script loaded in mGBA)
+    - `recorder.py` (ffmpeg piping/segmentation OR Gymnasium wrapper glue)
 - `tests/` (pytest)
 
 ### 2) EmulatorBackend contract (Python)
 
 Provide an `EmulatorBackend` abstract interface with methods:
 
-- `launch(rom_path, *, config)` (for mGBA, this may just verify connectivity/ROM)
+- `launch(rom_path, *, config)` / `reset()`
 - `step_frame(controller_state)` -> returns current frame number
-- `save_state_bytes()` / `load_state_bytes(data)`
-- `save_state_file(path)` / `load_state_file(path)` (optional convenience)
-- `read_memory(addr, size)` / `write_memory(addr, data)` (optional but implement if feasible)
-- `screenshot(path)` (optional)
+- `save_state_bytes()` / `load_state_bytes(data)` (best-effort; if Stable-Retro exposes state APIs, use them)
+- `read_memory(addr, size)` / `write_memory(addr, data)` (optional, using RAM access if feasible)
+- `get_frame_rgb()` (required if recording frames manually)
 - `close()`
 
-For this prompt, the concrete backend is **`MgbaBackend`**, which speaks to the Lua bridge over TCP.
+For this prompt, the concrete backend is **`StableRetroBackend`**, which wraps `retro.make(...)`.
 
 ### 3) Deterministic runner + resumability
 
 Runner requirements:
 
 - Deterministic stepping:
-  - For each frame: determine controller state from DigPipe action schedule (press/release) -> send to mGBA -> run exactly 1 frame.
+  - For each frame: determine controller state from DigPipe action schedule (press/release) -> convert to Stable-Retro keys vector -> `env.step(keys)`.
 - Persistent manifest (`run_manifest.json`):
   - ROM absolute path + sha256
-  - backend identifier (`mgba + lua bridge`) and versions (best-effort)
+  - backend identifier (`stable-retro`) and versions (best-effort)
   - start digit index
   - current digit index / chunk index / action cursor
   - current frame
@@ -123,30 +103,36 @@ Runner requirements:
   - any notable config (hold_frames, release_frames, chunk_size)
 - Resume mode:
   - load latest checkpoint
-  - restore emulator state
+  - restore emulator state (state bytes if available; otherwise document limitations and implement “best effort” checkpoints using Stable-Retro `.state` files where possible)
   - resume DigPipe cursor deterministically
-  - continue seamlessly
 
-### 4) Video recording (OS-agnostic)
+### 4) Video recording (OS-agnostic + headless)
 
-Provide a recording strategy that works across OSes:
+Implement a recording strategy:
 
-- Preferred: have Lua bridge periodically `emu.screenshot()` (PNG) to a temp folder and Python encodes frames with ffmpeg (not ideal, but reliable and portable).
-- Alternative: implement an ffmpeg “screen capture” mode per-OS (documented), but keep it optional.
-- Segment output (`segment_0001.mp4`, etc.) to avoid giant files.
+Option A (preferred): Gymnasium RecordVideo wrapper
+- Build env with `render_mode="rgb_array"`, wrap with `gymnasium.wrappers.RecordVideo`.
+- Ensure the wrapper is triggered for long continuous runs (segmenting required; implement segmenting by closing/re-opening env/wrapper periodically).
+
+Option B: Manual frame capture to ffmpeg
+- `frame = env.render()` or use returned observation if it’s an image.
+- Pipe frames to ffmpeg via stdin (`rawvideo`).
+- Segment output by time or frame count.
 
 ### 5) CLI
 
 Implement:
 
-- `digplay run --rom PATH --start-digit-index N --outdir DIR [--max-frames N] [--checkpoint-every N] [--chunk-size N] [--hold-frames N] [--release-frames N] [--record-video]`
+- `digplay run --game GAME_NAME --state STATE_NAME --start-digit-index N --outdir DIR [--max-frames N] [--checkpoint-every N] [--chunk-size N] [--hold-frames N] [--release-frames N] [--record-video]`
 - `digplay resume --run-dir DIR [--max-frames N]`
 - `digplay info --run-dir DIR`
-- `digplay probe --run-dir DIR --read-ram ADDR --len N` (optional memory inspection)
+- `digplay probe --run-dir DIR --dump-ram [--len N]` (optional)
+
+Note: Stable-Retro identifies games by “integration name” (GAME_NAME), not necessarily a ROM filepath. If you accept a `--rom` path, you must map it to the integrated game name or instruct the user how to integrate it and then use `--game`.
 
 ### 6) Testing (pytest)
 
-- Unit tests must NOT require mGBA.
+- Unit tests must NOT require real ROMs.
 - Provide a `FakeBackend` for tests that simulates:
   - frame stepping
   - controller state application
@@ -154,6 +140,8 @@ Implement:
 - Tests must validate:
   - DigPipe action scheduling is applied on the correct frames
   - checkpoint/resume yields identical final state vs uninterrupted run
+
+- Integration tests for Stable-Retro should be skipped unless env var `DIGPLAY_RUN_INTEGRATION_TESTS=1` is set.
 
 ### 7) Code quality
 
@@ -166,24 +154,25 @@ Implement:
 
 ---
 
-## First-time setup instructions (must be included in DigPlay README)
+## README requirements
 
+Include:
 - How to install DigPlay
-- How to install mGBA
-- How to open mGBA, load ROM, open Tools -> Scripting, load `scripts/mgba_bridge.lua`
-- How to start DigPlay which connects to the Lua bridge and begins stepping
-- How to resume from checkpoints
+- How to install Stable-Retro
+- How to integrate ROMs (high-level; do not provide ROMs)
+- Example run + resume commands
+- Notes on determinism + checkpointing constraints
 
 ---
 
 ## Acceptance criteria
 
 - A user can:
-  1) Start mGBA, load ROM, load the Lua bridge script
-  2) Run: `digplay run --rom game.gba --start-digit-index 1000 --max-frames 600 --outdir ./runs/test_mgba`
+  1) Integrate a GB/GBC/GBA ROM into Stable-Retro (per README)
+  2) Run: `digplay run --game SomeGame --start-digit-index 1000 --max-frames 600 --outdir ./runs/test_stable_retro --record-video`
   3) Observe creation of:
      - manifest JSON
-     - checkpoint(s) with emulator state
-     - optional video segments
-  4) Resume: `digplay resume --run-dir ./runs/test_mgba --max-frames 600`
+     - checkpoint(s)
+     - video segments (or RecordVideo outputs)
+  4) Resume: `digplay resume --run-dir ./runs/test_stable_retro --max-frames 600`
   5) Determinism proof: the run after resume matches the uninterrupted run’s manifest end state
