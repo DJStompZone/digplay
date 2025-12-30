@@ -1,0 +1,19 @@
+[project]
+name = "digplay"
+version = "0.1.0"
+description = "Emulation harness that allows games to be played using consecutive digits of Pi as input"
+authors = [
+    {name = "DJ Stomp",email = "85457381+DJStompZone@users.noreply.github.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10,<4.0"
+dependencies = [
+]
+
+[tool.poetry]
+packages = [{include = "digplay"}]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
